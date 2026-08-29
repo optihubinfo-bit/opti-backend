@@ -1,6 +1,7 @@
 const express = require('express');
 const supabase = require('../supabaseClient');
 const asyncHandler = require('../utils/asyncHandler');
+const { requireOwner } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -92,7 +93,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
   res.json(data);
 }));
 
-router.delete('/:id', asyncHandler(async (req, res) => {
+router.delete('/:id', requireOwner, asyncHandler(async (req, res) => {
   const { error } = await supabase.from('products').delete().eq('id', req.params.id);
   if (error) throw httpError(500, error.message);
   res.status(204).send();

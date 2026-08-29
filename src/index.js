@@ -5,7 +5,11 @@ const cors = require('cors');
 const productsRouter = require('./routes/products');
 const customersRouter = require('./routes/customers');
 const invoicesRouter = require('./routes/invoices');
+const authRouter = require('./routes/auth');
+const reportsRouter = require('./routes/reports');
+const usersRouter = require('./routes/users');
 const errorHandler = require('./middleware/errorHandler');
+const { requireAuth } = require('./middleware/auth');
 
 const app = express();
 
@@ -24,9 +28,12 @@ app.use(express.json());
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
-app.use('/api/products', productsRouter);
-app.use('/api/customers', customersRouter);
-app.use('/api/invoices', invoicesRouter);
+app.use('/api/auth', authRouter);
+app.use('/api/products', requireAuth, productsRouter);
+app.use('/api/customers', requireAuth, customersRouter);
+app.use('/api/invoices', requireAuth, invoicesRouter);
+app.use('/api/reports', reportsRouter);
+app.use('/api/users', usersRouter);
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 app.use(errorHandler);
