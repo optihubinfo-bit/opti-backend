@@ -9,6 +9,7 @@ const authRouter = require('./routes/auth');
 const reportsRouter = require('./routes/reports');
 const usersRouter = require('./routes/users');
 const storesRouter = require('./routes/stores');
+const storeRouter = require('./routes/store');
 const errorHandler = require('./middleware/errorHandler');
 const { requireAuth } = require('./middleware/auth');
 
@@ -31,6 +32,7 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 app.use('/api/auth', authRouter);
 app.use('/api/stores', storesRouter);
+app.use('/api/store', storeRouter);
 app.use('/api/products', requireAuth, productsRouter);
 app.use('/api/customers', requireAuth, customersRouter);
 app.use('/api/invoices', requireAuth, invoicesRouter);

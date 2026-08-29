@@ -7,10 +7,21 @@ const router = express.Router();
 
 router.use(requireStoreUser);
 
+const CATEGORIES = ['Sunglasses', 'Frames', 'Lenses', 'Accessories', 'Other'];
+
 function httpError(status, message) {
   const err = new Error(message);
   err.status = status;
   return err;
+}
+
+function normalizeCategory(category) {
+  if (category === undefined || category === null || String(category).trim() === '') return null;
+  const trimmed = String(category).trim();
+  if (!CATEGORIES.includes(trimmed)) {
+    throw httpError(400, `Category must be one of: ${CATEGORIES.join(', ')}`);
+  }
+  return trimmed;
 }
 
 router.get('/', asyncHandler(async (req, res) => {
@@ -50,7 +61,7 @@ router.post('/', asyncHandler(async (req, res) => {
     store_id: req.storeId,
     name: name.trim(),
     sku: sku && String(sku).trim() ? String(sku).trim() : null,
-    category: category && String(category).trim() ? String(category).trim() : null,
+    category: normalizeCategory(category),
     unit: unit && String(unit).trim() ? String(unit).trim() : 'pcs',
     price: Number(price),
     cost: cost ? Number(cost) : 0,
@@ -81,7 +92,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
   const payload = {
     name: name.trim(),
     sku: sku && String(sku).trim() ? String(sku).trim() : null,
-    category: category && String(category).trim() ? String(category).trim() : null,
+    category: normalizeCategory(category),
     unit: unit && String(unit).trim() ? String(unit).trim() : 'pcs',
     price: Number(price),
     cost: cost ? Number(cost) : 0,
