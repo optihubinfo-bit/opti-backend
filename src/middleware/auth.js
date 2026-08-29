@@ -17,7 +17,7 @@ async function requireAuth(req, res, next) {
 
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('id, email, full_name, role')
+      .select('id, email, full_name, role, store_id')
       .eq('id', data.user.id)
       .single();
     if (profileError || !profile) throw httpError(401, 'No profile found for this account');
@@ -36,4 +36,33 @@ function requireOwner(req, res, next) {
   next();
 }
 
-module.exports = { requireAuth, requireOwner };
+function requireSuperAdmin(req, res, next) {
+  if (!req.user || req.user.role !== 'super_admin') {
+    return next(httpError(403, 'Super admin access required'));
+  }
+  next();
+}
+
+// Ensures the caller is an owner/staff member of an active store, and attaches
+// req.storeId so route handlers always scope their queries to it.
+async function requireStoreUser(req, res, next) {
+  try {
+    if (!req.user || (req.user.role !== 'owner' && req.user.role !== 'staff') || !req.user.store_id) {
+      throw httpError(403, 'This action requires a store account');
+    }
+    const { data: store, error } = await supabase
+      .from('stores')
+      .select('id, is_active')
+      .eq('id', req.user.store_id)
+      .single();
+    if (error || !store) throw httpError(403, 'Store not found');
+    if (!store.is_active) throw httpError(403, 'This store has been suspended');
+
+    req.storeId = store.id;
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { requireAuth, requireOwner, requireSuperAdmin, requireStoreUser };

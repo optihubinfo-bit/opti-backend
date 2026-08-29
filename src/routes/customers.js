@@ -1,9 +1,11 @@
 const express = require('express');
 const supabase = require('../supabaseClient');
 const asyncHandler = require('../utils/asyncHandler');
-const { requireOwner } = require('../middleware/auth');
+const { requireOwner, requireStoreUser } = require('../middleware/auth');
 
 const router = express.Router();
+
+router.use(requireStoreUser);
 
 function httpError(status, message) {
   const err = new Error(message);
@@ -13,7 +15,7 @@ function httpError(status, message) {
 
 router.get('/', asyncHandler(async (req, res) => {
   const { search } = req.query;
-  let query = supabase.from('customers').select('*').order('name', { ascending: true });
+  let query = supabase.from('customers').select('*').eq('store_id', req.storeId).order('name', { ascending: true });
   if (search && search.trim()) {
     const term = search.trim().replace(/[%,]/g, '');
     query = query.or(`name.ilike.%${term}%,phone.ilike.%${term}%,email.ilike.%${term}%`);
@@ -24,7 +26,12 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const { data, error } = await supabase.from('customers').select('*').eq('id', req.params.id).single();
+  const { data, error } = await supabase
+    .from('customers')
+    .select('*')
+    .eq('id', req.params.id)
+    .eq('store_id', req.storeId)
+    .single();
   if (error) throw httpError(404, 'Customer not found');
   res.json(data);
 }));
@@ -34,6 +41,7 @@ router.post('/', asyncHandler(async (req, res) => {
   if (!name || !name.trim()) throw httpError(400, 'Customer name is required');
 
   const payload = {
+    store_id: req.storeId,
     name: name.trim(),
     phone: phone && String(phone).trim() ? String(phone).trim() : null,
     email: email && String(email).trim() ? String(email).trim() : null,
@@ -56,14 +64,23 @@ router.put('/:id', asyncHandler(async (req, res) => {
     address: address && String(address).trim() ? String(address).trim() : null
   };
 
-  const { data, error } = await supabase.from('customers').update(payload).eq('id', req.params.id).select().single();
-  if (error) throw httpError(500, error.message);
+  const { data, error } = await supabase
+    .from('customers')
+    .update(payload)
+    .eq('id', req.params.id)
+    .eq('store_id', req.storeId)
+    .select()
+    .single();
+  if (error) {
+    if (error.code === 'PGRST116') throw httpError(404, 'Customer not found');
+    throw httpError(500, error.message);
+  }
   if (!data) throw httpError(404, 'Customer not found');
   res.json(data);
 }));
 
 router.delete('/:id', requireOwner, asyncHandler(async (req, res) => {
-  const { error } = await supabase.from('customers').delete().eq('id', req.params.id);
+  const { error } = await supabase.from('customers').delete().eq('id', req.params.id).eq('store_id', req.storeId);
   if (error) throw httpError(500, error.message);
   res.status(204).send();
 }));

@@ -1,9 +1,11 @@
 const express = require('express');
 const supabase = require('../supabaseClient');
 const asyncHandler = require('../utils/asyncHandler');
-const { requireOwner } = require('../middleware/auth');
+const { requireOwner, requireStoreUser } = require('../middleware/auth');
 
 const router = express.Router();
+
+router.use(requireStoreUser);
 
 function httpError(status, message) {
   const err = new Error(message);
@@ -13,7 +15,7 @@ function httpError(status, message) {
 
 router.get('/', asyncHandler(async (req, res) => {
   const { search } = req.query;
-  let query = supabase.from('products').select('*').order('name', { ascending: true });
+  let query = supabase.from('products').select('*').eq('store_id', req.storeId).order('name', { ascending: true });
   if (search && search.trim()) {
     const term = search.trim().replace(/[%,]/g, '');
     query = query.or(`name.ilike.%${term}%,sku.ilike.%${term}%`);
@@ -24,7 +26,12 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const { data, error } = await supabase.from('products').select('*').eq('id', req.params.id).single();
+  const { data, error } = await supabase
+    .from('products')
+    .select('*')
+    .eq('id', req.params.id)
+    .eq('store_id', req.storeId)
+    .single();
   if (error) throw httpError(404, 'Product not found');
   res.json(data);
 }));
@@ -40,6 +47,7 @@ router.post('/', asyncHandler(async (req, res) => {
   }
 
   const payload = {
+    store_id: req.storeId,
     name: name.trim(),
     sku: sku && String(sku).trim() ? String(sku).trim() : null,
     category: category && String(category).trim() ? String(category).trim() : null,
@@ -84,9 +92,16 @@ router.put('/:id', asyncHandler(async (req, res) => {
     updated_at: new Date().toISOString()
   };
 
-  const { data, error } = await supabase.from('products').update(payload).eq('id', req.params.id).select().single();
+  const { data, error } = await supabase
+    .from('products')
+    .update(payload)
+    .eq('id', req.params.id)
+    .eq('store_id', req.storeId)
+    .select()
+    .single();
   if (error) {
     if (error.code === '23505') throw httpError(409, 'A product with this SKU already exists');
+    if (error.code === 'PGRST116') throw httpError(404, 'Product not found');
     throw httpError(500, error.message);
   }
   if (!data) throw httpError(404, 'Product not found');
@@ -94,7 +109,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/:id', requireOwner, asyncHandler(async (req, res) => {
-  const { error } = await supabase.from('products').delete().eq('id', req.params.id);
+  const { error } = await supabase.from('products').delete().eq('id', req.params.id).eq('store_id', req.storeId);
   if (error) throw httpError(500, error.message);
   res.status(204).send();
 }));

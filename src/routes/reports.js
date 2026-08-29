@@ -1,7 +1,7 @@
 const express = require('express');
 const supabase = require('../supabaseClient');
 const asyncHandler = require('../utils/asyncHandler');
-const { requireAuth, requireOwner } = require('../middleware/auth');
+const { requireAuth, requireOwner, requireStoreUser } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -23,10 +23,11 @@ function daysAgo(n) {
   return d;
 }
 
-async function fetchInvoicesSince(sinceDate) {
+async function fetchInvoicesSince(storeId, sinceDate) {
   const { data, error } = await supabase
     .from('invoices')
     .select('id, total, payment_status, created_at')
+    .eq('store_id', storeId)
     .gte('created_at', sinceDate.toISOString());
   if (error) throw httpError(500, error.message);
   return data;
@@ -42,17 +43,18 @@ function summarize(invoices) {
   return { revenue, unpaid, orders, avgOrderValue };
 }
 
-router.get('/overview', requireAuth, requireOwner, asyncHandler(async (req, res) => {
+router.get('/overview', requireAuth, requireStoreUser, requireOwner, asyncHandler(async (req, res) => {
+  const storeId = req.storeId;
   const today = startOfUTCDay(new Date());
   const last7Start = daysAgo(6);
   const last30Start = daysAgo(29);
   const trendStart = daysAgo(13);
 
   const [todayInvoices, last7Invoices, last30Invoices, trendInvoices] = await Promise.all([
-    fetchInvoicesSince(today),
-    fetchInvoicesSince(last7Start),
-    fetchInvoicesSince(last30Start),
-    fetchInvoicesSince(trendStart)
+    fetchInvoicesSince(storeId, today),
+    fetchInvoicesSince(storeId, last7Start),
+    fetchInvoicesSince(storeId, last30Start),
+    fetchInvoicesSince(storeId, trendStart)
   ]);
 
   const trendMap = {};
@@ -91,6 +93,7 @@ router.get('/overview', requireAuth, requireOwner, asyncHandler(async (req, res)
   const { data: allProducts, error: productsError } = await supabase
     .from('products')
     .select('id, name, quantity, low_stock_threshold')
+    .eq('store_id', storeId)
     .order('quantity', { ascending: true });
   if (productsError) throw httpError(500, productsError.message);
   const lowStockProducts = (allProducts || []).filter((p) => p.quantity <= p.low_stock_threshold);

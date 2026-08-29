@@ -1,8 +1,11 @@
 const express = require('express');
 const supabase = require('../supabaseClient');
 const asyncHandler = require('../utils/asyncHandler');
+const { requireStoreUser } = require('../middleware/auth');
 
 const router = express.Router();
+
+router.use(requireStoreUser);
 
 function httpError(status, message) {
   const err = new Error(message);
@@ -18,10 +21,10 @@ router.get('/', asyncHandler(async (req, res) => {
   let query = supabase
     .from('invoices')
     .select('*, customers(name, phone)')
+    .eq('store_id', req.storeId)
     .order('created_at', { ascending: false });
   if (search && search.trim()) {
-    const term = search.trim().replace(/[%,]/g, '');
-    query = query.ilike('invoice_number', `%${term}%`);
+    query = query.ilike('invoice_number', `%${search.trim()}%`);
   }
   const { data, error } = await query;
   if (error) throw httpError(500, error.message);
@@ -33,6 +36,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
     .from('invoices')
     .select('*, customers(id, name, phone, email, address)')
     .eq('id', req.params.id)
+    .eq('store_id', req.storeId)
     .single();
   if (error) throw httpError(404, 'Invoice not found');
 
@@ -64,6 +68,7 @@ router.post('/', asyncHandler(async (req, res) => {
   }
 
   const { data, error } = await supabase.rpc('create_invoice', {
+    p_store_id: req.storeId,
     p_customer_id: customer_id || null,
     p_items: items.map((i) => ({ product_id: i.product_id, quantity: Number(i.quantity) })),
     p_discount: discount ? Number(discount) : 0,
