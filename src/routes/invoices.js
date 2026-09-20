@@ -14,7 +14,6 @@ function httpError(status, message) {
 }
 
 const PAYMENT_METHODS = ['cash', 'card', 'upi', 'other'];
-const PAYMENT_STATUSES = ['paid', 'unpaid'];
 
 function cleanStr(value, maxLen) {
   if (value === undefined || value === null) return '';
@@ -22,35 +21,51 @@ function cleanStr(value, maxLen) {
 }
 
 // Keeps only the known prescription fields and returns null if nothing was actually filled in.
+// Shape mirrors a standard optical prescription pad: Distance + Near + Addition per eye, plus PD.
 function normalizePrescription(prescription) {
   if (!prescription || typeof prescription !== 'object') return null;
 
+  const measurement = (m) => ({
+    sph: cleanStr(m?.sph, 20),
+    cyl: cleanStr(m?.cyl, 20),
+    axis: cleanStr(m?.axis, 20)
+  });
+
   const eye = (e) => ({
-    sph: cleanStr(e?.sph, 20),
-    cyl: cleanStr(e?.cyl, 20),
-    axis: cleanStr(e?.axis, 20)
+    distance: measurement(e?.distance),
+    near: measurement(e?.near),
+    addition: cleanStr(e?.addition, 20)
   });
 
   const result = {
     right: eye(prescription.right),
     left: eye(prescription.left),
+    pdMode: prescription.pdMode === 'split' ? 'split' : 'single',
     pd: cleanStr(prescription.pd, 20),
+    pdRight: cleanStr(prescription.pdRight, 20),
+    pdLeft: cleanStr(prescription.pdLeft, 20),
     notes: cleanStr(prescription.notes, 500)
   };
 
   const hasValue = [
-    result.right.sph, result.right.cyl, result.right.axis,
-    result.left.sph, result.left.cyl, result.left.axis,
-    result.pd, result.notes
+    result.right.distance.sph, result.right.distance.cyl, result.right.distance.axis, result.right.addition,
+    result.right.near.sph, result.right.near.cyl, result.right.near.axis,
+    result.left.distance.sph, result.left.distance.cyl, result.left.distance.axis, result.left.addition,
+    result.left.near.sph, result.left.near.cyl, result.left.near.axis,
+    result.pd, result.pdRight, result.pdLeft, result.notes
   ].some((v) => v !== '');
 
   return hasValue ? result : null;
 }
+
+const INVOICE_SELECT = '*, customers(name, phone), stores(name, phone, address)';
+const INVOICE_DETAIL_SELECT = '*, customers(id, name, phone, email, address), stores(name, phone, address)';
+
 router.get('/', asyncHandler(async (req, res) => {
   const { search } = req.query;
   let query = supabase
     .from('invoices')
-    .select('*, customers(name, phone), stores(name)')
+    .select(INVOICE_SELECT)
     .eq('store_id', req.storeId)
     .order('created_at', { ascending: false });
   if (search && search.trim()) {
@@ -64,7 +79,7 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const { data: invoice, error } = await supabase
     .from('invoices')
-    .select('*, customers(id, name, phone, email, address), stores(name)')
+    .select(INVOICE_DETAIL_SELECT)
     .eq('id', req.params.id)
     .eq('store_id', req.storeId)
     .single();
@@ -76,12 +91,18 @@ router.get('/:id', asyncHandler(async (req, res) => {
     .eq('invoice_id', req.params.id);
   if (itemsError) throw httpError(500, itemsError.message);
 
-  res.json({ ...invoice, items });
+  const { data: payments, error: paymentsError } = await supabase
+    .from('invoice_payments')
+    .select('*')
+    .eq('invoice_id', req.params.id)
+    .order('created_at', { ascending: true });
+  if (paymentsError) throw httpError(500, paymentsError.message);
+
+  res.json({ ...invoice, items, payments });
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
-  const { customer_id, items, discount, tax_percent, payment_method, payment_status, is_gst_invoice, prescription } = req.body;
-
+  const { customer_id, items, discount, tax_percent, payment_method, amount_paid, is_gst_invoice, prescription } = req.body;
 
   if (!Array.isArray(items) || items.length === 0) {
     throw httpError(400, 'Invoice must include at least one item');
@@ -92,12 +113,17 @@ router.post('/', asyncHandler(async (req, res) => {
   }
 
   const method = PAYMENT_METHODS.includes(payment_method) ? payment_method : 'cash';
-  const status = PAYMENT_STATUSES.includes(payment_status) ? payment_status : 'paid';
   const applyGst = is_gst_invoice === true;
 
-  if (status === 'unpaid' && !customer_id) {
-    throw httpError(400, 'A customer must be selected for unpaid (credit) invoices');
+  let amountPaid = null; // null = paid in full
+  if (amount_paid !== undefined && amount_paid !== null && amount_paid !== '') {
+    amountPaid = Number(amount_paid);
+    if (Number.isNaN(amountPaid) || amountPaid < 0) {
+      throw httpError(400, 'Amount paid must be a valid non-negative number');
+    }
   }
+  // Whether a deposit below the (server-computed) total requires a customer is enforced
+  // by the create_invoice function itself, which is the only place that knows the total.
 
   const { data, error } = await supabase.rpc('create_invoice', {
     p_store_id: req.storeId,
@@ -106,19 +132,50 @@ router.post('/', asyncHandler(async (req, res) => {
     p_discount: discount ? Number(discount) : 0,
     p_tax_percent: applyGst && tax_percent ? Number(tax_percent) : 0,
     p_payment_method: method,
-    p_payment_status: status,
+    p_amount_paid: amountPaid,
     p_is_gst_invoice: applyGst,
     p_prescription: normalizePrescription(prescription)
   });
 
   if (error) throw httpError(400, error.message);
-  const { data: fullItems } = await supabase.from('invoice_items').select('*').eq('invoice_id', invoiceRow.id);
-  const { data: customer } = customer_id
-    ? await supabase.from('customers').select('id, name, phone, email, address').eq('id', customer_id).single()
-    : { data: null };
-  const { data: store } = await supabase.from('stores').select('name').eq('id', req.storeId).single();
 
-  res.status(201).json({ ...invoiceRow, items: fullItems || [], customers: customer, stores: store });
+  const { data: fullItems } = await supabase.from('invoice_items').select('*').eq('invoice_id', data.id);
+  const { data: customer } = data.customer_id
+    ? await supabase.from('customers').select('id, name, phone, email, address').eq('id', data.customer_id).single()
+    : { data: null };
+  const { data: store } = await supabase.from('stores').select('name, phone, address').eq('id', req.storeId).single();
+
+  res.status(201).json({ ...data, items: fullItems || [], customers: customer, stores: store });
+}));
+
+router.post('/:id/payments', asyncHandler(async (req, res) => {
+  const { amount, method, note } = req.body;
+  if (amount === undefined || amount === null || Number.isNaN(Number(amount)) || Number(amount) <= 0) {
+    throw httpError(400, 'Valid payment amount is required');
+  }
+  const cleanMethod = PAYMENT_METHODS.includes(method) ? method : 'cash';
+
+  const { data, error } = await supabase.rpc('record_invoice_payment', {
+    p_store_id: req.storeId,
+    p_invoice_id: req.params.id,
+    p_amount: Number(amount),
+    p_method: cleanMethod,
+    p_note: note ? cleanStr(note, 300) : null
+  });
+  if (error) throw httpError(400, error.message);
+
+  const { data: fullItems } = await supabase.from('invoice_items').select('*').eq('invoice_id', req.params.id);
+  const { data: payments } = await supabase
+    .from('invoice_payments')
+    .select('*')
+    .eq('invoice_id', req.params.id)
+    .order('created_at', { ascending: true });
+  const { data: customer } = data.customer_id
+    ? await supabase.from('customers').select('id, name, phone, email, address').eq('id', data.customer_id).single()
+    : { data: null };
+  const { data: store } = await supabase.from('stores').select('name, phone, address').eq('id', req.storeId).single();
+
+  res.json({ ...data, items: fullItems || [], payments: payments || [], customers: customer, stores: store });
 }));
 
 module.exports = router;

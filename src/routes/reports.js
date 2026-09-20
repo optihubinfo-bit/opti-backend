@@ -26,7 +26,7 @@ function daysAgo(n) {
 async function fetchInvoicesSince(storeId, sinceDate) {
   const { data, error } = await supabase
     .from('invoices')
-    .select('id, total, payment_status, created_at')
+    .select('id, total, amount_paid, payment_status, created_at')
     .eq('store_id', storeId)
     .gte('created_at', sinceDate.toISOString());
   if (error) throw httpError(500, error.message);
@@ -35,9 +35,7 @@ async function fetchInvoicesSince(storeId, sinceDate) {
 
 function summarize(invoices) {
   const revenue = invoices.reduce((sum, i) => sum + Number(i.total), 0);
-  const unpaid = invoices
-    .filter((i) => i.payment_status === 'unpaid')
-    .reduce((sum, i) => sum + Number(i.total), 0);
+  const unpaid = invoices.reduce((sum, i) => sum + Math.max(0, Number(i.total) - Number(i.amount_paid ?? 0)), 0);
   const orders = invoices.length;
   const avgOrderValue = orders > 0 ? revenue / orders : 0;
   return { revenue, unpaid, orders, avgOrderValue };
