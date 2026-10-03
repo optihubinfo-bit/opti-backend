@@ -33,7 +33,9 @@ router.post('/', asyncHandler(async (req, res) => {
     password,
     email_confirm: true,
     user_metadata: {
-      full_name: full_name && full_name.trim() ? full_name.trim() : null,
+      full_name: full_name && full_name.trim() ? full_name.trim() : null
+    },
+    app_metadata: {
       role: 'staff',
       store_id: req.storeId
     }

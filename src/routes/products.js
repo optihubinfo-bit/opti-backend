@@ -56,6 +56,9 @@ router.post('/', asyncHandler(async (req, res) => {
   if (quantity === undefined || quantity === null || Number.isNaN(Number(quantity)) || Number(quantity) < 0) {
     throw httpError(400, 'Valid quantity is required');
   }
+  if (cost !== undefined && cost !== null && cost !== '' && (Number.isNaN(Number(cost)) || Number(cost) < 0)) {
+    throw httpError(400, 'Cost must be a valid non-negative number');
+  }
 
   const payload = {
     store_id: req.storeId,
@@ -64,7 +67,7 @@ router.post('/', asyncHandler(async (req, res) => {
     category: normalizeCategory(category),
     unit: unit && String(unit).trim() ? String(unit).trim() : 'pcs',
     price: Number(price),
-    cost: cost ? Number(cost) : 0,
+    cost: cost !== undefined && cost !== null && cost !== '' ? Number(cost) : 0,
     quantity: Number(quantity),
     low_stock_threshold: low_stock_threshold !== undefined && low_stock_threshold !== null && low_stock_threshold !== ''
       ? Number(low_stock_threshold)
@@ -88,6 +91,9 @@ router.put('/:id', asyncHandler(async (req, res) => {
   if (quantity === undefined || quantity === null || Number.isNaN(Number(quantity)) || Number(quantity) < 0) {
     throw httpError(400, 'Valid quantity is required');
   }
+  if (cost !== undefined && cost !== null && cost !== '' && (Number.isNaN(Number(cost)) || Number(cost) < 0)) {
+    throw httpError(400, 'Cost must be a valid non-negative number');
+  }
 
   const payload = {
     name: name.trim(),
@@ -95,7 +101,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
     category: normalizeCategory(category),
     unit: unit && String(unit).trim() ? String(unit).trim() : 'pcs',
     price: Number(price),
-    cost: cost ? Number(cost) : 0,
+    cost: cost !== undefined && cost !== null && cost !== '' ? Number(cost) : 0,
     quantity: Number(quantity),
     low_stock_threshold: low_stock_threshold !== undefined && low_stock_threshold !== null && low_stock_threshold !== ''
       ? Number(low_stock_threshold)

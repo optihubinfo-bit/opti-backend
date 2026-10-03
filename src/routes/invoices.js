@@ -115,6 +115,15 @@ router.post('/', asyncHandler(async (req, res) => {
   const method = PAYMENT_METHODS.includes(payment_method) ? payment_method : 'cash';
   const applyGst = is_gst_invoice === true;
 
+  const discountNum = discount !== undefined && discount !== null && discount !== '' ? Number(discount) : 0;
+  if (Number.isNaN(discountNum) || discountNum < 0) {
+    throw httpError(400, 'Discount must be a valid non-negative number');
+  }
+  const taxPercentNum = tax_percent !== undefined && tax_percent !== null && tax_percent !== '' ? Number(tax_percent) : 0;
+  if (Number.isNaN(taxPercentNum) || taxPercentNum < 0) {
+    throw httpError(400, 'GST/tax percent must be a valid non-negative number');
+  }
+
   let amountPaid = null; // null = paid in full
   if (amount_paid !== undefined && amount_paid !== null && amount_paid !== '') {
     amountPaid = Number(amount_paid);
@@ -129,8 +138,8 @@ router.post('/', asyncHandler(async (req, res) => {
     p_store_id: req.storeId,
     p_customer_id: customer_id || null,
     p_items: items.map((i) => ({ product_id: i.product_id, quantity: Number(i.quantity) })),
-    p_discount: discount ? Number(discount) : 0,
-    p_tax_percent: applyGst && tax_percent ? Number(tax_percent) : 0,
+    p_discount: discountNum,
+    p_tax_percent: applyGst ? taxPercentNum : 0,
     p_payment_method: method,
     p_amount_paid: amountPaid,
     p_is_gst_invoice: applyGst,
@@ -141,7 +150,7 @@ router.post('/', asyncHandler(async (req, res) => {
 
   const { data: fullItems } = await supabase.from('invoice_items').select('*').eq('invoice_id', data.id);
   const { data: customer } = data.customer_id
-    ? await supabase.from('customers').select('id, name, phone, email, address').eq('id', data.customer_id).single()
+    ? await supabase.from('customers').select('id, name, phone, email, address').eq('id', data.customer_id).eq('store_id', req.storeId).single()
     : { data: null };
   const { data: store } = await supabase.from('stores').select('name, phone, address').eq('id', req.storeId).single();
 
@@ -171,7 +180,7 @@ router.post('/:id/payments', asyncHandler(async (req, res) => {
     .eq('invoice_id', req.params.id)
     .order('created_at', { ascending: true });
   const { data: customer } = data.customer_id
-    ? await supabase.from('customers').select('id, name, phone, email, address').eq('id', data.customer_id).single()
+    ? await supabase.from('customers').select('id, name, phone, email, address').eq('id', data.customer_id).eq('store_id', req.storeId).single()
     : { data: null };
   const { data: store } = await supabase.from('stores').select('name, phone, address').eq('id', req.storeId).single();
 

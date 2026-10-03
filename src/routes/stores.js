@@ -72,7 +72,9 @@ router.post('/', asyncHandler(async (req, res) => {
     password: owner_password,
     email_confirm: true,
     user_metadata: {
-      full_name: owner_full_name && owner_full_name.trim() ? owner_full_name.trim() : null,
+      full_name: owner_full_name && owner_full_name.trim() ? owner_full_name.trim() : null
+    },
+    app_metadata: {
       role: 'owner',
       store_id: store.id
     }
