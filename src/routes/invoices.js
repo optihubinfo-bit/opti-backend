@@ -34,7 +34,8 @@ function normalizePrescription(prescription) {
   const eye = (e) => ({
     distance: measurement(e?.distance),
     near: measurement(e?.near),
-    addition: cleanStr(e?.addition, 20)
+    addition: cleanStr(e?.addition, 20),
+    va: cleanStr(e?.va, 20) // visual acuity, e.g. 6/6
   });
 
   const result = {
@@ -48,9 +49,9 @@ function normalizePrescription(prescription) {
   };
 
   const hasValue = [
-    result.right.distance.sph, result.right.distance.cyl, result.right.distance.axis, result.right.addition,
+    result.right.distance.sph, result.right.distance.cyl, result.right.distance.axis, result.right.addition, result.right.va,
     result.right.near.sph, result.right.near.cyl, result.right.near.axis,
-    result.left.distance.sph, result.left.distance.cyl, result.left.distance.axis, result.left.addition,
+    result.left.distance.sph, result.left.distance.cyl, result.left.distance.axis, result.left.addition, result.left.va,
     result.left.near.sph, result.left.near.cyl, result.left.near.axis,
     result.pd, result.pdRight, result.pdLeft, result.notes
   ].some((v) => v !== '');
@@ -58,31 +59,95 @@ function normalizePrescription(prescription) {
   return hasValue ? result : null;
 }
 
-const INVOICE_SELECT = '*, customers(name, phone), stores(name, phone, address)';
-const INVOICE_DETAIL_SELECT = '*, customers(id, name, phone, email, address), stores(name, phone, address)';
+// Store + customer fields printed on invoices. The extra fields come from
+// 008_color_bill_format.sql and 009_customer_details_and_line_discount.sql; the
+// LEGACY set is a fallback so invoices keep loading if those haven't been run yet
+// (the Color/Classic bills just show fewer details).
+const FIELDS = {
+  store: 'name, phone, address, gst_number, email, shop_timing, open_days, bill_terms, bill_note',
+  customer: 'id, name, phone, email, address, age, birth_date, gst_number, customer_number'
+};
+const LEGACY_FIELDS = {
+  store: 'name, phone, address, gst_number',
+  customer: 'id, name, phone, email, address'
+};
+
+const invoiceSelect = (f) => `*, customers(${f.customer}), stores(${f.store})`;
+
+// Postgres "undefined_column" — raised when 008/009 haven't been applied yet.
+function isMissingColumn(error) {
+  return !!error && (error.code === '42703' || /column .* does not exist/i.test(error.message || ''));
+}
+
+// Runs buildQuery(fields) with the full field lists, retrying with the
+// legacy lists if the new columns don't exist yet.
+async function withFields(buildQuery) {
+  const result = await buildQuery(FIELDS);
+  if (isMissingColumn(result.error)) return buildQuery(LEGACY_FIELDS);
+  return result;
+}
+
+async function fetchStore(storeId) {
+  const { data } = await withFields((f) =>
+    supabase.from('stores').select(f.store).eq('id', storeId).single()
+  );
+  return data;
+}
+
+async function fetchCustomer(customerId, storeId) {
+  if (!customerId) return null;
+  const { data } = await withFields((f) =>
+    supabase.from('customers').select(f.customer).eq('id', customerId).eq('store_id', storeId).single()
+  );
+  return data;
+}
+
+// Item discount % for a cart line: blank -> 0, otherwise 0..100.
+function parseLineDiscount(value) {
+  if (value === undefined || value === null || value === '') return 0;
+  const n = Number(value);
+  if (Number.isNaN(n) || n < 0 || n > 100) throw httpError(400, 'Item discount must be between 0 and 100 percent');
+  return Math.round(n * 100) / 100;
+}
+
+// Accepts 'YYYY-MM-DD' (from <input type="date">); anything else -> null.
+function parseDeliveryDate(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const str = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) throw httpError(400, 'Delivery date must be a valid date');
+  const d = new Date(`${str}T00:00:00Z`);
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== str) {
+    throw httpError(400, 'Delivery date must be a valid date');
+  }
+  return str;
+}
 
 router.get('/', asyncHandler(async (req, res) => {
   const { search } = req.query;
-  let query = supabase
-    .from('invoices')
-    .select(INVOICE_SELECT)
-    .eq('store_id', req.storeId)
-    .order('created_at', { ascending: false });
-  if (search && search.trim()) {
-    query = query.ilike('invoice_number', `%${search.trim()}%`);
-  }
-  const { data, error } = await query;
+  const { data, error } = await withFields((f) => {
+    let query = supabase
+      .from('invoices')
+      .select(invoiceSelect(f))
+      .eq('store_id', req.storeId)
+      .order('created_at', { ascending: false });
+    if (search && search.trim()) {
+      query = query.ilike('invoice_number', `%${search.trim()}%`);
+    }
+    return query;
+  });
   if (error) throw httpError(500, error.message);
   res.json(data);
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const { data: invoice, error } = await supabase
-    .from('invoices')
-    .select(INVOICE_DETAIL_SELECT)
-    .eq('id', req.params.id)
-    .eq('store_id', req.storeId)
-    .single();
+  const { data: invoice, error } = await withFields((f) =>
+    supabase
+      .from('invoices')
+      .select(invoiceSelect(f))
+      .eq('id', req.params.id)
+      .eq('store_id', req.storeId)
+      .single()
+  );
   if (error) throw httpError(404, 'Invoice not found');
 
   const { data: items, error: itemsError } = await supabase
@@ -102,7 +167,8 @@ router.get('/:id', asyncHandler(async (req, res) => {
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
-  const { customer_id, items, discount, tax_percent, payment_method, amount_paid, is_gst_invoice, prescription } = req.body;
+  const { customer_id, items, discount, tax_percent, payment_method, amount_paid, is_gst_invoice, prescription, delivery_date } = req.body;
+  const deliveryDate = parseDeliveryDate(delivery_date);
 
   if (!Array.isArray(items) || items.length === 0) {
     throw httpError(400, 'Invoice must include at least one item');
@@ -137,7 +203,11 @@ router.post('/', asyncHandler(async (req, res) => {
   const { data, error } = await supabase.rpc('create_invoice', {
     p_store_id: req.storeId,
     p_customer_id: customer_id || null,
-    p_items: items.map((i) => ({ product_id: i.product_id, quantity: Number(i.quantity) })),
+    p_items: items.map((i) => ({
+      product_id: i.product_id,
+      quantity: Number(i.quantity),
+      discount_percent: parseLineDiscount(i.discount_percent)
+    })),
     p_discount: discountNum,
     p_tax_percent: applyGst ? taxPercentNum : 0,
     p_payment_method: method,
@@ -148,13 +218,29 @@ router.post('/', asyncHandler(async (req, res) => {
 
   if (error) throw httpError(400, error.message);
 
-  const { data: fullItems } = await supabase.from('invoice_items').select('*').eq('invoice_id', data.id);
-  const { data: customer } = data.customer_id
-    ? await supabase.from('customers').select('id, name, phone, email, address').eq('id', data.customer_id).eq('store_id', req.storeId).single()
-    : { data: null };
-  const { data: store } = await supabase.from('stores').select('name, phone, address').eq('id', req.storeId).single();
+  // delivery_date is set right after creation (rather than via create_invoice) so the
+  // RPC signature stays unchanged. Store-scoped; a failure here doesn't undo the sale.
+  let invoiceRow = data;
+  if (deliveryDate) {
+    const { data: updated, error: deliveryError } = await supabase
+      .from('invoices')
+      .update({ delivery_date: deliveryDate })
+      .eq('id', data.id)
+      .eq('store_id', req.storeId)
+      .select('*')
+      .single();
+    if (deliveryError) {
+      console.error('Failed to set delivery_date on invoice', data.id, deliveryError.message);
+    } else if (updated) {
+      invoiceRow = updated;
+    }
+  }
 
-  res.status(201).json({ ...data, items: fullItems || [], customers: customer, stores: store });
+  const { data: fullItems } = await supabase.from('invoice_items').select('*').eq('invoice_id', data.id);
+  const customer = await fetchCustomer(data.customer_id, req.storeId);
+  const store = await fetchStore(req.storeId);
+
+  res.status(201).json({ ...invoiceRow, items: fullItems || [], customers: customer, stores: store });
 }));
 
 router.post('/:id/payments', asyncHandler(async (req, res) => {
@@ -179,10 +265,8 @@ router.post('/:id/payments', asyncHandler(async (req, res) => {
     .select('*')
     .eq('invoice_id', req.params.id)
     .order('created_at', { ascending: true });
-  const { data: customer } = data.customer_id
-    ? await supabase.from('customers').select('id, name, phone, email, address').eq('id', data.customer_id).eq('store_id', req.storeId).single()
-    : { data: null };
-  const { data: store } = await supabase.from('stores').select('name, phone, address').eq('id', req.storeId).single();
+  const customer = await fetchCustomer(data.customer_id, req.storeId);
+  const store = await fetchStore(req.storeId);
 
   res.json({ ...data, items: fullItems || [], payments: payments || [], customers: customer, stores: store });
 }));
