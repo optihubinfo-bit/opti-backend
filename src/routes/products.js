@@ -15,6 +15,13 @@ function httpError(status, message) {
   return err;
 }
 
+// Staff only ever see selling prices — purchase cost (and so the store's margin) is owner-only.
+function forRole(req, product) {
+  if (!product || req.user.role === 'owner') return product;
+  const { cost, ...rest } = product;
+  return rest;
+}
+
 function normalizeCategory(category) {
   if (category === undefined || category === null || String(category).trim() === '') return null;
   const trimmed = String(category).trim();
@@ -33,7 +40,7 @@ router.get('/', asyncHandler(async (req, res) => {
   }
   const { data, error } = await query;
   if (error) throw httpError(500, error.message);
-  res.json(data);
+  res.json(data.map((p) => forRole(req, p)));
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
@@ -44,10 +51,10 @@ router.get('/:id', asyncHandler(async (req, res) => {
     .eq('store_id', req.storeId)
     .single();
   if (error) throw httpError(404, 'Product not found');
-  res.json(data);
+  res.json(forRole(req, data));
 }));
 
-router.post('/', asyncHandler(async (req, res) => {
+router.post('/', requireOwner, asyncHandler(async (req, res) => {
   const { name, sku, category, unit, price, cost, quantity, low_stock_threshold } = req.body;
   if (!name || !name.trim()) throw httpError(400, 'Product name is required');
   if (price === undefined || price === null || Number.isNaN(Number(price)) || Number(price) < 0) {
@@ -82,7 +89,7 @@ router.post('/', asyncHandler(async (req, res) => {
   res.status(201).json(data);
 }));
 
-router.put('/:id', asyncHandler(async (req, res) => {
+router.put('/:id', requireOwner, asyncHandler(async (req, res) => {
   const { name, sku, category, unit, price, cost, quantity, low_stock_threshold } = req.body;
   if (!name || !name.trim()) throw httpError(400, 'Product name is required');
   if (price === undefined || price === null || Number.isNaN(Number(price)) || Number(price) < 0) {

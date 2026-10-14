@@ -96,7 +96,7 @@ router.post('/', asyncHandler(async (req, res) => {
   res.status(201).json(data);
 }));
 
-router.put('/:id', asyncHandler(async (req, res) => {
+router.put('/:id', requireOwner, asyncHandler(async (req, res) => {
   const payload = customerPayload(req.body);
 
   const { data, error } = await supabase

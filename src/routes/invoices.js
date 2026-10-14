@@ -122,6 +122,15 @@ function parseDeliveryDate(value) {
   return str;
 }
 
+// Staff see only the bills they created themselves, plus any bill that still has a
+// balance due (so they can collect it when the customer comes back). They never get
+// the full sales history — that's owner-only.
+const isStaff = (req) => req.user.role !== 'owner';
+
+function staffCanSee(req, invoice) {
+  return invoice.created_by === req.user.id || invoice.payment_status !== 'paid';
+}
+
 router.get('/', asyncHandler(async (req, res) => {
   const { search } = req.query;
   const { data, error } = await withFields((f) => {
@@ -132,6 +141,9 @@ router.get('/', asyncHandler(async (req, res) => {
       .order('created_at', { ascending: false });
     if (search && search.trim()) {
       query = query.ilike('invoice_number', `%${search.trim()}%`);
+    }
+    if (isStaff(req)) {
+      query = query.or(`created_by.eq.${req.user.id},payment_status.neq.paid`);
     }
     return query;
   });
@@ -149,6 +161,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
       .single()
   );
   if (error) throw httpError(404, 'Invoice not found');
+  if (isStaff(req) && !staffCanSee(req, invoice)) throw httpError(404, 'Invoice not found');
 
   const { data: items, error: itemsError } = await supabase
     .from('invoice_items')
@@ -218,22 +231,35 @@ router.post('/', asyncHandler(async (req, res) => {
 
   if (error) throw httpError(400, error.message);
 
-  // delivery_date is set right after creation (rather than via create_invoice) so the
-  // RPC signature stays unchanged. Store-scoped; a failure here doesn't undo the sale.
+  // delivery_date and who billed it are set right after creation (rather than via
+  // create_invoice) so the RPC signature stays unchanged. Store-scoped; a failure here
+  // doesn't undo the sale.
+  const extra = {
+    created_by: req.user.id,
+    created_by_name: req.user.full_name || req.user.email
+  };
+  if (deliveryDate) extra.delivery_date = deliveryDate;
+
+  const applyExtra = (fields) => supabase
+    .from('invoices')
+    .update(fields)
+    .eq('id', data.id)
+    .eq('store_id', req.storeId)
+    .select('*')
+    .single();
+
   let invoiceRow = data;
-  if (deliveryDate) {
-    const { data: updated, error: deliveryError } = await supabase
-      .from('invoices')
-      .update({ delivery_date: deliveryDate })
-      .eq('id', data.id)
-      .eq('store_id', req.storeId)
-      .select('*')
-      .single();
-    if (deliveryError) {
-      console.error('Failed to set delivery_date on invoice', data.id, deliveryError.message);
-    } else if (updated) {
-      invoiceRow = updated;
+  let { data: updated, error: extraError } = await applyExtra(extra);
+  if (isMissingColumn(extraError) && deliveryDate) {
+    // 010_staff_permissions.sql not run yet — still save the delivery date.
+    ({ data: updated, error: extraError } = await applyExtra({ delivery_date: deliveryDate }));
+  }
+  if (extraError) {
+    if (!isMissingColumn(extraError)) {
+      console.error('Failed to set delivery_date/created_by on invoice', data.id, extraError.message);
     }
+  } else if (updated) {
+    invoiceRow = updated;
   }
 
   const { data: fullItems } = await supabase.from('invoice_items').select('*').eq('invoice_id', data.id);
@@ -249,6 +275,16 @@ router.post('/:id/payments', asyncHandler(async (req, res) => {
     throw httpError(400, 'Valid payment amount is required');
   }
   const cleanMethod = PAYMENT_METHODS.includes(method) ? method : 'cash';
+
+  if (isStaff(req)) {
+    const { data: existing } = await supabase
+      .from('invoices')
+      .select('id, created_by, payment_status')
+      .eq('id', req.params.id)
+      .eq('store_id', req.storeId)
+      .single();
+    if (!existing || !staffCanSee(req, existing)) throw httpError(404, 'Invoice not found');
+  }
 
   const { data, error } = await supabase.rpc('record_invoice_payment', {
     p_store_id: req.storeId,
