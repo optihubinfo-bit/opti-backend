@@ -10,6 +10,8 @@ const reportsRouter = require('./routes/reports');
 const usersRouter = require('./routes/users');
 const storesRouter = require('./routes/stores');
 const storeRouter = require('./routes/store');
+const offersRouter = require('./routes/offers');
+const { resumeCampaigns } = require('./messaging/sender');
 const errorHandler = require('./middleware/errorHandler');
 const { requireAuth } = require('./middleware/auth');
 
@@ -38,9 +40,13 @@ app.use('/api/customers', requireAuth, customersRouter);
 app.use('/api/invoices', requireAuth, invoicesRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/users', usersRouter);
+app.use('/api/offers', offersRouter);
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`Backend listening on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Backend listening on port ${PORT}`);
+  resumeCampaigns();
+});

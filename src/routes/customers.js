@@ -49,7 +49,7 @@ function parseGstNumber(value) {
 }
 
 function customerPayload(body) {
-  const { name, phone, email, address, age, birth_date, gst_number } = body;
+  const { name, phone, email, address, age, birth_date, gst_number, marketing_opt_in } = body;
   if (!name || !String(name).trim()) throw httpError(400, 'Customer name is required');
   return {
     name: String(name).trim().slice(0, 120),
@@ -58,7 +58,9 @@ function customerPayload(body) {
     address: optionalText(address, 300),
     age: parseAge(age),
     birth_date: parseBirthDate(birth_date),
-    gst_number: parseGstNumber(gst_number)
+    gst_number: parseGstNumber(gst_number),
+    // Consent to receive offer messages (011_offer_messages.sql). Never assumed.
+    marketing_opt_in: marketing_opt_in === true
   };
 }
 
