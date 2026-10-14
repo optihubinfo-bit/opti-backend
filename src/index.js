@@ -48,5 +48,6 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`Backend listening on port ${PORT}`);
-  resumeCampaigns();
+  // Never let a failed resume (e.g. database briefly unreachable on wake) crash the server.
+  resumeCampaigns().catch((err) => console.error('Could not resume offer campaigns', err));
 });
